@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// 바이낸스 income 기록을 (symbol, tradeId) 단위로 묶은 개별 거래/체결 단위
+model Trade {
+  id          String   @id @default(cuid())
+  uid         String   @unique // 중복 방지 키: "SYMBOL-tradeId" 또는 "FUNDING-tranId"
+  symbol      String
+  kind        String   // TRADE | FUNDING
+  time        DateTime // 체결 시각 (UTC)
+  date        String   // KST 기준 YYYY-MM-DD (집계용)
+
+  side         String  @default("") // BUY | SELL
+  positionSide String  @default("") // LONG | SHORT | BOTH
+  method       String  @default("") // MANUAL | STOP | TAKE_PROFIT | TRAILING | LIQUIDATION | ADL | UNKNOWN
+  qty          Float   @default(0)  // 합산 체결 수량
+  avgPrice     Float   @default(0)  // 가중평균 체결가
+
+  pnlUsdt     Float    @default(0) // Realized PnL
+  feeUsdt     Float    @default(0) // 수수료 (음수 = 지출)
+  fundingUsdt Float    @default(0)
+  rate        Float    // 적용 USD/KRW
+  pnlKrw      Float    @default(0)
+  feeKrw      Float    @default(0)
+  fundingKrw  Float    @default(0)
+  netKrw      Float    @default(0) // pnl + fee + funding
+
+  // 매매 일지 (마크다운)
+  tradeReason String   @default("")
+  tags        String   @default("") // 콤마 구분. SQLite는 배열 미지원
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([date])
+  @@index([time])
+}
+
+model ExchangeRate {
+  date String @id // YYYY-MM-DD
+  rate Float
+}
+
+/// 입금 / 출금 / 선물 지갑 이체 기록
+model Transfer {
+  id        String   @id @default(cuid())
+  uid       String   @unique // "DEPOSIT-id" | "WITHDRAW-id" | "TRANSFER-tranId"
+  type      String   // DEPOSIT | WITHDRAW | FUTURES_IN | FUTURES_OUT
+  coin      String
+  amount    Float    // 항상 양수
+  fee       Float    @default(0)
+  network   String   @default("")
+  status    String   @default("")
+  txId      String   @default("")
+  time      DateTime
+  date      String   // KST YYYY-MM-DD
+  priceUsdt Float?   // 거래 시각의 코인 가격 (USDT). 스테이블코인은 1
+  rate      Float?   // USD/KRW
+  amountKrw Float?
+  createdAt DateTime @default(now())
+
+  @@index([time])
+}
