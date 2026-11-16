@@ -149,6 +149,9 @@ export interface UserTrade {
   positionSide: string;
   price: string;
   qty: string;
+  realizedPnl: string;
+  commission: string;
+  commissionAsset: string;
 }
 
 /** /fapi/v1/userTrades — 종목 필수, 7일 윈도우. tradeId → orderId 매핑용 */
@@ -239,4 +242,228 @@ export function classifyOrder(o?: FuturesOrder, algo?: AlgoOrder): string {
   const t = o.origType || o.type;
   if (t in ALGO_METHOD) return ALGO_METHOD[t];
   return "MANUAL";
+}
+
+export interface PositionRisk {
+  symbol: string;
+  positionSide: string; // BOTH | LONG | SHORT
+  positionAmt: string; // 양수 = 롱, 음수 = 숏
+  entryPrice: string;
+  breakEvenPrice: string;
+  markPrice: string;
+  unRealizedProfit: string;
+  liquidationPrice: string;
+  notional: string;
+  initialMargin: string;
+  marginType?: string;
+  updateTime: number;
+}
+
+/** /fapi/v3/positionRisk — 현재 보유 중인 포지션 (수량 0 제외) */
+export async function fetchOpenPositions(): Promise<PositionRisk[]> {
+  const rows = await signedGet<PositionRisk[]>("/fapi/v3/positionRisk", {}, FAPI, 5);
+  return rows.filter((p) => parseFloat(p.positionAmt) !== 0);
+}
+
+/** 서명된 POST 요청 (선물 주문 / 레버리지 / 마진모드 변경용) */
+export async function signedPost<T>(
+  path: string,
+  params: Record<string, string | number | boolean>,
+  base = FAPI,
+  weight = 1
+): Promise<T> {
+  await throttle(weight);
+  const key = process.env.BINANCE_API_KEY;
+  const secret = process.env.BINANCE_API_SECRET;
+  if (!key || !secret) throw new Error("BINANCE_API_KEY / BINANCE_API_SECRET 미설정");
+
+  const qs = new URLSearchParams({
+    ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])),
+    timestamp: String(Date.now()),
+    recvWindow: "10000",
+  }).toString();
+  const sig = crypto.createHmac("sha256", secret).update(qs).digest("hex");
+
+  const res = await fetch(`${base}${path}?${qs}&signature=${sig}`, {
+    method: "POST",
+    headers: { "X-MBX-APIKEY": key },
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Binance ${res.status}: ${await res.text()}`);
+  return res.json() as Promise<T>;
+}
+
+export interface FuturesBalanceRow {
+  asset: string;
+  balance: string;
+  availableBalance: string;
+  crossUnPnl: string;
+}
+
+/** 선물 계좌 USDT 잔고 및 주문 가능(availableBalance) 조회 */
+export async function fetchFuturesUsdtBalance(): Promise<{
+  balance: number;
+  availableBalance: number;
+}> {
+  const rows = await signedGet<FuturesBalanceRow[]>("/fapi/v2/balance", {}, FAPI, 5);
+  const usdt = rows.find((r) => r.asset === "USDT");
+  return {
+    balance: usdt ? parseFloat(usdt.balance) : 0,
+    availableBalance: usdt ? parseFloat(usdt.availableBalance) : 0,
+  };
+}
+
+/** 양방향(Hedge) 모드 여부 조회 (true = LONG/SHORT 분리, false = 단방향 BOTH) */
+export async function fetchDualSidePosition(): Promise<boolean> {
+  const res = await signedGet<{ dualSidePosition: boolean }>(
+    "/fapi/v1/positionSide/dual",
+    {},
+    FAPI,
+    30
+  );
+  return Boolean(res.dualSidePosition);
+}
+
+export interface SymbolPrecisionRule {
+  symbol: string;
+  tickSize: number;
+  stepSize: number;
+  minQty: number;
+  minNotional: number;
+  pricePrecision: number;
+  quantityPrecision: number;
+}
+
+let cachedRulesMap: Map<string, SymbolPrecisionRule> | null = null;
+let cachedRulesAt = 0;
+
+/** /fapi/v1/exchangeInfo 기반 심볼별 호가단위(tickSize) 및 수량단위(stepSize) 조회 (10분 캐시) */
+export async function fetchSymbolRule(symbol: string): Promise<SymbolPrecisionRule> {
+  const now = Date.now();
+  if (!cachedRulesMap || now - cachedRulesAt > 600_000) {
+    const res = await fetch(`${FAPI}/fapi/v1/exchangeInfo`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`exchangeInfo 조회 실패 (${res.status})`);
+    const data = (await res.json()) as {
+      symbols: {
+        symbol: string;
+        pricePrecision: number;
+        quantityPrecision: number;
+        filters: Record<string, string>[];
+      }[];
+    };
+    const map = new Map<string, SymbolPrecisionRule>();
+    for (const s of data.symbols) {
+      const pf = s.filters.find((f) => f.filterType === "PRICE_FILTER");
+      const lf = s.filters.find((f) => f.filterType === "LOT_SIZE");
+      const mf = s.filters.find((f) => f.filterType === "MIN_NOTIONAL");
+      map.set(s.symbol, {
+        symbol: s.symbol,
+        tickSize: pf ? parseFloat(pf.tickSize) : 0.0001,
+        stepSize: lf ? parseFloat(lf.stepSize) : 0.001,
+        minQty: lf ? parseFloat(lf.minQty) : 0.001,
+        minNotional: mf ? parseFloat(mf.notional) : 5,
+        pricePrecision: s.pricePrecision,
+        quantityPrecision: s.quantityPrecision,
+      });
+    }
+    cachedRulesMap = map;
+    cachedRulesAt = now;
+  }
+  return (
+    cachedRulesMap.get(symbol) ?? {
+      symbol,
+      tickSize: 0.0001,
+      stepSize: 0.001,
+      minQty: 0.001,
+      minNotional: 5,
+      pricePrecision: 4,
+      quantityPrecision: 3,
+    }
+  );
+}
+
+/** stepSize / tickSize 단위에 맞춰 안전하게 숫자 문자열 포맷 */
+export function roundToStep(value: number, step: number, mode: "floor" | "round" = "round"): string {
+  if (!step || step <= 0) return String(value);
+  const inv = Math.round(1 / step);
+  const scaled = value * inv;
+  const snapped = (mode === "floor" ? Math.floor(scaled + 1e-9) : Math.round(scaled)) / inv;
+  const stepStr = step.toFixed(10).replace(/0+$/, "");
+  const decimals = stepStr.includes(".") ? stepStr.split(".")[1].length : 0;
+  return snapped.toFixed(decimals);
+}
+
+/** 마진 모드 변경 (ISOLATED | CROSSED). 이미 해당 모드인 경우(-4046) 무시 */
+export async function setFuturesMarginType(
+  symbol: string,
+  marginType: "ISOLATED" | "CROSSED"
+): Promise<void> {
+  try {
+    await signedPost("/fapi/v1/marginType", { symbol, marginType });
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg.includes("-4046")) return; // "No need to change margin type."
+    throw e;
+  }
+}
+
+/** 레버리지 변경 (1 ~ 125) */
+export async function setFuturesLeverage(symbol: string, leverage: number): Promise<void> {
+  await signedPost("/fapi/v1/leverage", { symbol, leverage });
+}
+
+/** 조건부 익절/손절(STOP_MARKET / TAKE_PROFIT_MARKET) 등록 — 일반 엔드포인트 실패 시 Algo 엔드포인트 자동 폴백 */
+export async function placeConditionalOrder(params: {
+  symbol: string;
+  side: "BUY" | "SELL";
+  positionSide: "BOTH" | "LONG" | "SHORT";
+  type: "STOP_MARKET" | "TAKE_PROFIT_MARKET";
+  stopPrice: string;
+  quantity?: string;
+  closePosition?: boolean;
+}): Promise<Record<string, unknown>> {
+  const baseParams: Record<string, string | number | boolean> = {
+    symbol: params.symbol,
+    side: params.side,
+    positionSide: params.positionSide,
+    type: params.type,
+    stopPrice: params.stopPrice,
+    workingType: "MARK_PRICE",
+  };
+  if (params.closePosition) {
+    baseParams.closePosition = "true";
+  } else if (params.quantity) {
+    baseParams.quantity = params.quantity;
+    if (params.positionSide === "BOTH") {
+      baseParams.reduceOnly = "true";
+    }
+  }
+
+  try {
+    return await signedPost<Record<string, unknown>>("/fapi/v1/order", baseParams);
+  } catch (e) {
+    const msg = (e as Error).message;
+    // 계정이 Algo Order 서비스 전용으로 라우팅되는 경우 /fapi/v1/algoOrder 로 폴백
+    if (msg.includes("-4120") || msg.includes("algoOrder") || msg.includes("Algo")) {
+      const algoParams: Record<string, string | number | boolean> = {
+        algoType: "CONDITIONAL",
+        symbol: params.symbol,
+        side: params.side,
+        positionSide: params.positionSide,
+        type: params.type,
+        triggerPrice: params.stopPrice,
+        workingType: "MARK_PRICE",
+      };
+      if (params.closePosition) {
+        algoParams.closePosition = "true";
+      } else if (params.quantity) {
+        algoParams.quantity = params.quantity;
+        if (params.positionSide === "BOTH") {
+          algoParams.reduceOnly = "true";
+        }
+      }
+      return await signedPost<Record<string, unknown>>("/fapi/v1/algoOrder", algoParams);
+    }
+    throw e;
+  }
 }

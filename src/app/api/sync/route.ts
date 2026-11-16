@@ -45,14 +45,22 @@ export async function POST(req: Request) {
       if (!i.tradeId || !i.symbol) continue;
       (timesBySymbol.get(i.symbol) ?? timesBySymbol.set(i.symbol, []).get(i.symbol)!).push(i.time);
     }
+    const DAY = 86_400_000;
     for (const [symbol, times] of timesBySymbol) {
       times.sort((a, b) => a - b);
-      let windowEnd = -1;
+      // 각 손익 발생 시점의 앞 7일 ~ 뒤 1일을 합쳐 조회 (수수료 0원 진입 체결까지 잡기 위함)
+      // 마지막 구간은 현재까지 연장 → 아직 청산 안 된 포지션의 진입 체결 포함
+      const ranges: [number, number][] = [];
       for (const t of times) {
-        if (t <= windowEnd) continue;
-        const ws = t - 5_000;
-        windowEnd = ws + 7 * 86_400_000 - 1;
-        for (const f of await fetchUserTrades(symbol, ws, Math.min(windowEnd, Date.now()))) {
+        const a = Math.max(start, t - 7 * DAY);
+        const b = t + DAY;
+        const lastR = ranges[ranges.length - 1];
+        if (lastR && a <= lastR[1]) lastR[1] = Math.max(lastR[1], b);
+        else ranges.push([a, b]);
+      }
+      ranges[ranges.length - 1][1] = Date.now();
+      for (const [a, b] of ranges) {
+        for (const f of await fetchUserTrades(symbol, a, Math.min(b, Date.now()))) {
           fillOf.set(`${symbol}-${f.id}`, f);
         }
       }
@@ -103,6 +111,28 @@ export async function POST(req: Request) {
       if (i.incomeType === "REALIZED_PNL") g.pnl += amt;
       else if (i.incomeType === "COMMISSION") g.fee += amt;
       else g.funding += amt;
+      groups.set(uid, g);
+    }
+
+    // income 기록이 없는 체결(수수료 0원 지정가 진입 등)도 포함해야 포지션 수량이 맞는다
+    const referenced = new Set<string>();
+    for (const g of groups.values()) g.legacyUids.forEach((k) => referenced.add(k));
+    for (const [fillId, f] of fillOf) {
+      if (referenced.has(fillId) || f.time < start) continue;
+      const symbol = fillId.slice(0, fillId.lastIndexOf("-"));
+      const uid = `${symbol}-order-${f.orderId}`;
+      const g =
+        groups.get(uid) ?? { uid, symbol, kind: "TRADE" as const, time: f.time, pnl: 0, fee: 0, funding: 0, method: "", side: "", positionSide: "", qty: 0, notional: 0, legacyUids: new Set<string>() };
+      const o = orderInfo.get(`${symbol}-${f.orderId}`);
+      g.method = classifyOrder(o, algoByOrder.get(`${symbol}-${f.orderId}`) ?? (o && algoByOrder.get(`${symbol}-${o.clientOrderId}`)));
+      g.side = f.side;
+      g.positionSide = f.positionSide;
+      g.qty += parseFloat(f.qty);
+      g.notional += parseFloat(f.qty) * parseFloat(f.price);
+      g.pnl += parseFloat(f.realizedPnl);
+      if (f.commissionAsset === "USDT" || f.commissionAsset === "USDC") g.fee -= parseFloat(f.commission);
+      g.time = Math.max(g.time, f.time);
+      g.legacyUids.add(fillId);
       groups.set(uid, g);
     }
 

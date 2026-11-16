@@ -6,8 +6,11 @@ import { METHOD_LABEL, actionLabel, krw, tone, type TradeDTO, type TransferDTO }
 import TradeDrawer from "./TradeDrawer";
 import Dashboard from "./Dashboard";
 import Calendar from "./Calendar";
+import { ClosedPositions, OpenPositions } from "./Positions";
+import DebtQuest from "./DebtQuest";
+import MarketScanner from "./MarketScanner";
 
-type View = "dashboard" | "calendar" | "trades" | "daily" | "monthly" | "transfers";
+type View = "dashboard" | "calendar" | "trades" | "daily" | "monthly" | "transfers" | "scanner" | "quest";
 
 const TYPE_LABEL: Record<TransferDTO["type"], string> = {
   DEPOSIT: "입금",
@@ -29,6 +32,7 @@ export default function Journal({
   const [hideInternal, setHideInternal] = useState(true);
   const [excludeFee, setExcludeFee] = useState(false);
   const [excludeFunding, setExcludeFunding] = useState(false);
+  const [tradeTab, setTradeTab] = useState<"fills" | "open" | "closed">("fills");
   const [view, setView] = useState<View>("dashboard");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -132,17 +136,52 @@ export default function Journal({
         </div>
       </header>
 
-      <nav className="mb-4 flex gap-2">
-        {(["dashboard", "calendar", "trades", "daily", "monthly", "transfers"] as View[]).map((v) => (
+      <nav className="mb-4 flex flex-wrap gap-2">
+        {(["dashboard", "calendar", "trades", "daily", "monthly", "transfers", "scanner", "quest"] as View[]).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
-            className={`rounded px-3 py-1.5 text-sm ${view === v ? "bg-neutral-100 text-black" : "bg-neutral-800"}`}
+            className={`rounded px-3 py-1.5 text-sm ${
+              view === v
+                ? v === "quest"
+                  ? "bg-amber-500 font-bold text-black"
+                  : "bg-neutral-100 text-black"
+                : v === "quest"
+                ? "border border-amber-500/40 bg-amber-950/30 text-amber-300 hover:bg-amber-950/50"
+                : "bg-neutral-800"
+            }`}
           >
-            {{ dashboard: "대시보드", calendar: "달력", trades: "거래 내역", daily: "일별", monthly: "월별", transfers: "입출금" }[v]}
+            {{
+              dashboard: "대시보드",
+              calendar: "달력",
+              trades: "거래 내역",
+              daily: "일별",
+              monthly: "월별",
+              transfers: "입출금",
+              scanner: "🔍 마켓 스캐너",
+              quest: "🎯 빚 탕감 퀘스트",
+            }[v]}
           </button>
         ))}
       </nav>
+
+      {view === "trades" && (
+        <div className="mb-3 flex w-fit overflow-hidden rounded border border-neutral-700 text-sm">
+          {([
+            ["fills", "체결 내역"],
+            ["open", "진행중 포지션"],
+            ["closed", "종료된 포지션"],
+          ] as const).map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => setTradeTab(k)}
+              className={`px-4 py-1.5 ${tradeTab === k ? "bg-amber-500 font-semibold text-black" : "bg-neutral-900 text-neutral-300 hover:bg-neutral-800"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {(view === "calendar" || view === "trades" || view === "daily" || view === "monthly") && (
         <div className="mb-3 flex gap-5 text-sm text-neutral-300">
@@ -173,7 +212,15 @@ export default function Journal({
 
       {view === "calendar" && <Calendar trades={adj} onSelect={setSelectedId} />}
 
-      {view !== "dashboard" && view !== "calendar" && (
+      {view === "quest" && <DebtQuest trades={trades} transfers={transfers} />}
+
+      {view === "scanner" && (
+        <MarketScanner
+          fxRate={trades.find((t) => t.rate)?.rate || transfers.find((t) => t.rate)?.rate || 1350}
+        />
+      )}
+
+      {view !== "dashboard" && view !== "calendar" && view !== "quest" && view !== "scanner" && (
       <div className="overflow-x-auto rounded border border-neutral-800">
         {view === "transfers" ? (
           <table className="w-full text-sm">
@@ -224,6 +271,10 @@ export default function Journal({
               )}
             </tbody>
           </table>
+        ) : view === "trades" && tradeTab === "open" ? (
+          <OpenPositions trades={adj} onSelect={setSelectedId} />
+        ) : view === "trades" && tradeTab === "closed" ? (
+          <ClosedPositions trades={adj} onSelect={setSelectedId} />
         ) : view === "trades" ? (
           <table className="w-full text-sm">
             <thead className="bg-neutral-900 text-left text-neutral-400">
