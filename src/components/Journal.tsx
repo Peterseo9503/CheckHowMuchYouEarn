@@ -9,8 +9,18 @@ import Calendar from "./Calendar";
 import { ClosedPositions, OpenPositions } from "./Positions";
 import DebtQuest from "./DebtQuest";
 import MarketScanner from "./MarketScanner";
+import AutoTraderPanel from "./AutoTraderPanel";
 
-type View = "dashboard" | "calendar" | "trades" | "daily" | "monthly" | "transfers" | "scanner" | "quest";
+type View =
+  | "dashboard"
+  | "calendar"
+  | "trades"
+  | "daily"
+  | "monthly"
+  | "transfers"
+  | "scanner"
+  | "autotrade"
+  | "quest";
 
 const TYPE_LABEL: Record<TransferDTO["type"], string> = {
   DEPOSIT: "입금",
@@ -137,7 +147,19 @@ export default function Journal({
       </header>
 
       <nav className="mb-4 flex flex-wrap gap-2">
-        {(["dashboard", "calendar", "trades", "daily", "monthly", "transfers", "scanner", "quest"] as View[]).map((v) => (
+        {(
+          [
+            "dashboard",
+            "calendar",
+            "trades",
+            "daily",
+            "monthly",
+            "transfers",
+            "scanner",
+            "autotrade",
+            "quest",
+          ] as View[]
+        ).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -145,9 +167,13 @@ export default function Journal({
               view === v
                 ? v === "quest"
                   ? "bg-amber-500 font-bold text-black"
+                  : v === "autotrade"
+                  ? "bg-emerald-500 font-bold text-black"
                   : "bg-neutral-100 text-black"
                 : v === "quest"
                 ? "border border-amber-500/40 bg-amber-950/30 text-amber-300 hover:bg-amber-950/50"
+                : v === "autotrade"
+                ? "border border-emerald-500/40 bg-emerald-950/30 text-emerald-300 hover:bg-emerald-950/50"
                 : "bg-neutral-800"
             }`}
           >
@@ -159,6 +185,7 @@ export default function Journal({
               monthly: "월별",
               transfers: "입출금",
               scanner: "🔍 마켓 스캐너",
+              autotrade: "🤖 자동매매 (95점+)",
               quest: "🎯 빚 탕감 퀘스트",
             }[v]}
           </button>
@@ -220,7 +247,17 @@ export default function Journal({
         />
       )}
 
-      {view !== "dashboard" && view !== "calendar" && view !== "quest" && view !== "scanner" && (
+      {view === "autotrade" && (
+        <AutoTraderPanel
+          fxRate={trades.find((t) => t.rate)?.rate || transfers.find((t) => t.rate)?.rate || 1350}
+        />
+      )}
+
+      {view !== "dashboard" &&
+        view !== "calendar" &&
+        view !== "quest" &&
+        view !== "scanner" &&
+        view !== "autotrade" && (
       <div className="overflow-x-auto rounded border border-neutral-800">
         {view === "transfers" ? (
           <table className="w-full text-sm">

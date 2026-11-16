@@ -67,3 +67,59 @@ model Transfer {
 
   @@index([time])
 }
+
+/// 95점+ 자동매매 봇 설정 (단일 설정 행 id="default")
+model AutoBotConfig {
+  id               String   @id @default("default")
+  enabled          Boolean  @default(false) // 자동매매 활성화 여부
+  paperMode        Boolean  @default(true)  // true: 모의투자(가상 체결), false: 바이낸스 실주문
+  minConfidence    Int      @default(95)    // 최소 타점 신뢰도 점수 (기본 95점)
+  timeframe        String   @default("15m") // 스캔 기준 분봉 (15m | 1h | 4h)
+  marginUsdt       Float    @default(30)    // 1회 진입 증거금 (USDT)
+  leverage         Int      @default(5)     // 진입 레버리지 배율
+  marginType       String   @default("ISOLATED") // ISOLATED | CROSSED
+  maxOpenPositions Int      @default(2)     // 동시 보유 가능한 최대 포지션 수
+  cooldownMin      Int      @default(240)   // 동일 코인 재진입 금지 쿨타임 (분, 기본 4시간)
+  allowLong        Boolean  @default(true)
+  allowShort       Boolean  @default(true)
+  updatedAt        DateTime @updatedAt
+}
+
+/// AI 타점 추천(95점+)으로 실행된 자동매매 전용 기록
+model AutoTrade {
+  id              String    @id @default(cuid())
+  symbol          String
+  side            String    // LONG | SHORT
+  isPaper         Boolean   @default(true)  // 모의투자 여부
+  timeframe       String    // 15m | 1h | 4h
+  strategyName    String    // 전략명
+  confidence      Int       // 진입 당시 신뢰도 점수 (예: 96)
+  reasons         String    // 진입 근거 목록 (JSON 문자열)
+  rsiAtEntry      Float     @default(0)
+  volSpikeAtEntry Float     @default(1)
+
+  marginUsdt      Float     // 투입 증거금 (USDT)
+  leverage        Int       // 레버리지
+  quantity        Float     // 주문 수량
+  entryPrice      Float     // 진입가
+  stopLoss        Float     // 손절가 (SL)
+  tp1             Float     // 1차 익절가 (TP1)
+  tp2             Float     // 2차 익절가 (TP2)
+  rrRatio         Float     @default(2.0)
+
+  status          String    @default("OPEN") // OPEN | TP1_HIT | TP2_HIT | SL_HIT | CLOSED | ERROR
+  exitPrice       Float?    // 종료(익절/손절/청산) 가격
+  pnlUsdt         Float     @default(0)      // 확정 또는 평가 손익 (USDT)
+  pnlRoiPct       Float     @default(0)      // 증거금 대비 수익률 (%)
+  orderId         String    @default("")     // 바이낸스 주문번호
+  logs            String    @default("")     // 실행/체결 로그
+  note            String    @default("")     // 사용자 메모
+
+  createdAt       DateTime  @default(now())
+  closedAt        DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@index([createdAt])
+  @@index([symbol])
+  @@index([status])
+}

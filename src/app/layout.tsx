@@ -5,8 +5,13 @@ export const metadata: Metadata = { title: "Trading Journal" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ko">
-      <body className="bg-neutral-950 text-neutral-100 antialiased">{children}</body>
+    <html lang="ko" suppressHydrationWarning>
+      <body
+        suppressHydrationWarning
+        className="bg-neutral-950 text-neutral-100 antialiased"
+      >
+        {children}
+      </body>
     </html>
   );
 }
