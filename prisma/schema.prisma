@@ -123,3 +123,12 @@ model AutoTrade {
   @@index([symbol])
   @@index([status])
 }
+
+/// 단일 사용자 마스터 비밀번호 / PIN 인증 및 5회 오류 잠금 상태
+model AuthConfig {
+  id             String    @id @default("master")
+  passwordHash   String    @default("") // "salt:hash" (scrypt). 비어 있으면 .env의 MASTER_PASSWORD 사용
+  failedAttempts Int       @default(0)  // 연속 실패 횟수 (5회 이상 시 잠금)
+  lockedUntil    DateTime?              // 잠금 해제 시각
+  updatedAt      DateTime  @updatedAt
+}

@@ -47,6 +47,64 @@ export default function Journal({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [msg, setMsg] = useState("");
+  const [pwModalOpen, setPwModalOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [pwError, setPwError] = useState("");
+  const [pwLoading, setPwLoading] = useState(false);
+
+  async function handleLogout() {
+    await fetch("/api/auth", { method: "DELETE" });
+    router.replace("/login");
+    router.refresh();
+  }
+
+  async function handleChangePassword(e: React.FormEvent) {
+    e.preventDefault();
+    setPwError("");
+    if (!currentPassword) {
+      setPwError("현재 비밀번호/PIN을 입력해주세요.");
+      return;
+    }
+    if (newPassword.trim().length < 4) {
+      setPwError("새 비밀번호/PIN은 최소 4자리 이상이어야 합니다.");
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setPwError("새 비밀번호 확인이 일치하지 않습니다.");
+      return;
+    }
+    setPwLoading(true);
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "change",
+          currentPassword,
+          newPassword,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setPwError(json.error || "비밀번호 변경에 실패했습니다.");
+        if (res.status === 429) {
+          await handleLogout();
+        }
+        return;
+      }
+      setPwModalOpen(false);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setMsg("마스터 비밀번호/PIN이 변경되었습니다.");
+    } catch (err) {
+      setPwError((err as Error).message);
+    } finally {
+      setPwLoading(false);
+    }
+  }
 
   // 수수료/펀딩비 제외 옵션을 반영한 거래 목록 (집계·테이블 공용)
   const adj = useMemo(
@@ -126,22 +184,39 @@ export default function Journal({
             누적 순손익 <span className={`font-semibold ${tone(total)}`}>{krw(total)}</span>
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
           {msg && <span className="text-sm text-neutral-400">{msg}</span>}
           <button
             onClick={() => sync(true)}
             disabled={syncing}
             title="저장된 거래를 전부 다시 받아 덮어씁니다 (메모는 유지)"
-            className="rounded border border-neutral-700 px-3 py-2 text-sm text-neutral-300 disabled:opacity-50"
+            className="rounded border border-neutral-700 px-3 py-2 text-sm text-neutral-300 hover:bg-neutral-900 disabled:opacity-50"
           >
             전체 재동기화
           </button>
           <button
             onClick={() => sync()}
             disabled={syncing}
-            className="rounded bg-amber-500 px-4 py-2 text-sm font-semibold text-black disabled:opacity-50"
+            className="rounded bg-amber-500 px-4 py-2 text-sm font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
           >
             {syncing ? "동기화 중…" : "바이낸스 동기화"}
+          </button>
+          <button
+            onClick={() => {
+              setPwError("");
+              setPwModalOpen(true);
+            }}
+            title="마스터 비밀번호 / PIN 변경"
+            className="rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-300 hover:bg-neutral-800"
+          >
+            🔑 암호 변경
+          </button>
+          <button
+            onClick={handleLogout}
+            title="즉시 화면을 잠그고 로그아웃합니다"
+            className="rounded border border-rose-500/40 bg-rose-950/30 px-3 py-2 text-sm text-rose-300 hover:bg-rose-950/60"
+          >
+            🔒 잠금
           </button>
         </div>
       </header>
@@ -398,6 +473,81 @@ export default function Journal({
       )}
 
       {selected && <TradeDrawer key={selected.id} trade={selected} onClose={() => setSelectedId(null)} onSaved={onSaved} />}
+
+      {pwModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm"
+          onClick={() => setPwModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-neutral-100">🔑 마스터 비밀번호 / PIN 변경</h2>
+              <button
+                onClick={() => setPwModalOpen(false)}
+                className="text-sm text-neutral-400 hover:text-neutral-200"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleChangePassword} className="space-y-3">
+              <div>
+                <label className="mb-1 block text-xs text-neutral-400">현재 비밀번호 / PIN</label>
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="현재 사용 중인 암호 입력"
+                  className="w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-neutral-400">새 비밀번호 / PIN (4자 이상)</label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="새로 사용할 암호 입력"
+                  className="w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-neutral-400">새 비밀번호 / PIN 확인</label>
+                <input
+                  type="password"
+                  value={confirmNewPassword}
+                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                  placeholder="새 암호 한 번 더 입력"
+                  className="w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+              {pwError && (
+                <div className="rounded border border-rose-500/40 bg-rose-950/30 px-3 py-2 text-xs text-rose-300">
+                  {pwError}
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setPwModalOpen(false)}
+                  className="rounded border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:bg-neutral-800"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  disabled={pwLoading}
+                  className="rounded bg-amber-500 px-4 py-2 text-sm font-semibold text-black hover:bg-amber-400 disabled:opacity-50"
+                >
+                  {pwLoading ? "저장 중…" : "변경 저장"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
